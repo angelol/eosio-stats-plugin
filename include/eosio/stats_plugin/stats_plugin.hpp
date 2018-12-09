@@ -10,12 +10,12 @@ namespace eosio {
 
    using namespace appbase;
 
-   typedef std::unique_ptr<class watcher_plugin_impl> watcher_plugin_ptr;
+   typedef std::unique_ptr<class stats_plugin_impl> stats_plugin_ptr;
 
-   class watcher_plugin : public appbase::plugin<watcher_plugin> {
+   class stats_plugin : public appbase::plugin<stats_plugin> {
    public:
-      watcher_plugin();
-      virtual ~watcher_plugin();
+      stats_plugin();
+      virtual ~stats_plugin();
 
       APPBASE_PLUGIN_REQUIRES((chain_plugin))
 
@@ -26,7 +26,7 @@ namespace eosio {
       void plugin_shutdown();
 
    private:
-      watcher_plugin_ptr my;
+      stats_plugin_ptr my;
    };
 
 }

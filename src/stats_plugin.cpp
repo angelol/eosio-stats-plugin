@@ -18,12 +18,12 @@
 
 
 namespace eosio {
-   static appbase::abstract_plugin& _watcher_plugin = app().register_plugin<watcher_plugin>();
+   static appbase::abstract_plugin& _stats_plugin = app().register_plugin<stats_plugin>();
 
    using namespace chain;
 
 
-   class watcher_plugin_impl {
+   class stats_plugin_impl {
    public:
 
       static const int64_t          default_age_limit = 60;
@@ -83,7 +83,7 @@ namespace eosio {
       chain_plugin* chain_plug                                   = nullptr;
       fc::optional<boost::signals2::scoped_connection> accepted_block_conn;
       fc::optional<boost::signals2::scoped_connection> applied_tx_conn;
-      std::set<watcher_plugin_impl::filter_entry>      filter_on;
+      std::set<stats_plugin_impl::filter_entry>      filter_on;
       fc::url                                          receiver_url;
       int64_t                                          age_limit = default_age_limit;
       action_queue_t                                   action_queue;
@@ -113,12 +113,10 @@ namespace eosio {
       // So 1 (this action) + all the inline actions
       action_seq_t on_action_trace(const action_trace& act, const transaction_id_type& tx_id,
                                    action_seq_t act_sequence) {
-         //~ ilog("on_action_trace - tx id: ${u}", ("u",tx_id));
-         if( filter(act)) {
-            action_queue.insert(std::make_pair(tx_id, sequenced_action(act.act, act_sequence,
-                                                                       act.receipt.receiver)));
+        ilog("on_action_trace - tx id: ${u}", ("u",tx_id));
+        action_queue.insert(std::make_pair(tx_id, sequenced_action(act.act, act_sequence,
+        act.receipt.receiver)));
             //~ ilog("Added to action_queue: ${u}", ("u",act.act));
-         }
          act_sequence++;
 
          for( const auto& iline : act.inline_traces ) {
@@ -204,14 +202,14 @@ namespace eosio {
       }
    };
 
-   const fc::microseconds watcher_plugin_impl::max_deserialization_time = fc::seconds(5);
-   const int64_t watcher_plugin_impl::default_age_limit;
+   const fc::microseconds stats_plugin_impl::max_deserialization_time = fc::seconds(5);
+   const int64_t stats_plugin_impl::default_age_limit;
 
-   watcher_plugin::watcher_plugin() : my(new watcher_plugin_impl()) {}
+   stats_plugin::stats_plugin() : my(new stats_plugin_impl()) {}
 
-   watcher_plugin::~watcher_plugin() {}
+   stats_plugin::~stats_plugin() {}
 
-   void watcher_plugin::set_program_options(options_description&, options_description& cfg) {
+   void stats_plugin::set_program_options(options_description&, options_description& cfg) {
       cfg.add_options()
          ("watch", bpo::value<vector<string>>()->composing(),
           "Track actions which match receiver:action. In case action is not specified, "
@@ -219,13 +217,13 @@ namespace eosio {
          ("watch-receiver-url", bpo::value<string>(),
           "URL where to send actions being tracked")
          ("watch-age-limit",
-          bpo::value<int64_t>()->default_value(watcher_plugin_impl::default_age_limit),
+          bpo::value<int64_t>()->default_value(stats_plugin_impl::default_age_limit),
           "Age limit in seconds for blocks to send notifications about."
           " No age limit if this is set to negative.");
 
    }
 
-   void watcher_plugin::plugin_initialize(const variables_map& options) {
+   void stats_plugin::plugin_initialize(const variables_map& options) {
 
       try {
          EOS_ASSERT(options.count("watch-receiver-url") == 1, fc::invalid_arg_exception,
@@ -243,7 +241,7 @@ namespace eosio {
                EOS_ASSERT(v.size() == 2, fc::invalid_arg_exception,
                           "Invalid value ${s} for --watch",
                           ("s", s));
-               watcher_plugin_impl::filter_entry fe{v[0], v[1]};
+               stats_plugin_impl::filter_entry fe{v[0], v[1]};
                EOS_ASSERT(fe.receiver.value, fc::invalid_arg_exception, "Invalid value ${s} for "
                                                                         "--watch", ("s", s));
                my->filter_on.insert(fe);
@@ -269,17 +267,17 @@ namespace eosio {
       } FC_LOG_AND_RETHROW()
    }
 
-   void watcher_plugin::plugin_startup() {
+   void stats_plugin::plugin_startup() {
       ilog("Watcher plugin started");
    }
 
-   void watcher_plugin::plugin_shutdown() {
+   void stats_plugin::plugin_shutdown() {
       my->applied_tx_conn.reset();
       my->accepted_block_conn.reset();
    }
 
 }
 
-FC_REFLECT(eosio::watcher_plugin_impl::action_notif, (tx_id)(account)(name)
+FC_REFLECT(eosio::stats_plugin_impl::action_notif, (tx_id)(account)(name)
    (seq_num)(receiver)(block_time)(block_num)(authorization)(action_data))
-FC_REFLECT(eosio::watcher_plugin_impl::message, (actions))
+FC_REFLECT(eosio::stats_plugin_impl::message, (actions))

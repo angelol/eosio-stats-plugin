@@ -13,7 +13,7 @@ You can either get notifications for all actions on a account, or any specific a
 Usually you don't want to receive notifications for actions which happened months ago, just because your nodeos is resyncing. To prevent this you can specify age limit for blocks, which are filtered for actions you want to receive. This is by default set to 1 minute, but is configurable.
 
 ## Flexible configuration
-Features just mentioned are configurable through options to nodeos (built with watcher_plugin) or in your config.ini. Use `nodeos --help` to see help for options.
+Features just mentioned are configurable through options to nodeos (built with stats_plugin) or in your config.ini. Use `nodeos --help` to see help for options.
 
 ## Asynchronous http calls
 Notifications are sent asynchronously, which means it does not interfere with normal operation of nodeos, even in case of unreliable http connection to the notification receiver.
@@ -37,7 +37,7 @@ export LOCAL_CMAKE_FLAGS="-DEOSIO_ADDITIONAL_PLUGINS=<path-to-eosio-stats-plugin
 ### EOSIO v1.1.0 and up
 1. Remove or comment out this line in CMakeLists.txt:
 ```
-eosio_additional_plugin(watcher_plugin)
+eosio_additional_plugin(stats_plugin)
 ```
 
 2. Copy this repo to `<eosio-source-dir>/plugins/` You should now have `<eosio-source-dir>/plugins/watcher-plugin`
@@ -48,7 +48,7 @@ eosio_additional_plugin(watcher_plugin)
 
 4. Add the following line to the bottom of `<eosio-source-dir>/programs/nodeos/CMakeLists.txt`
   ```
-  target_link_libraries( nodeos PRIVATE -Wl,${whole_archive_flag} watcher_plugin -Wl,${no_whole_archive_flag})
+  target_link_libraries( nodeos PRIVATE -Wl,${whole_archive_flag} stats_plugin -Wl,${no_whole_archive_flag})
   ```
 5. Build and install nodeos as usual. You could even just `cd <eosio-source-dir>/build` and then `sudo make install`
 
@@ -59,7 +59,7 @@ Enable this plugin using `--plugin` option to nodeos or in your config.ini. Use 
 ## Edit your nodeos config.ini (probably easier)
 ```
 #Enable plugin
-plugin = eosio::watcher_plugin
+plugin = eosio::stats_plugin
 #Set account:action so eosauthority:spaceinvader or just eosauthority: for all actions on eosauthority
 watch = eosauthority:
 #watch multiple if required 
@@ -74,7 +74,7 @@ watch-receiver-url = http://127.0.0.1:8082/blockchain_action
 watch-age-limit = 5
  ```
 ## Check if the plugin has loaded
-- You should see an entry for watcher_plugin in the logs when you restart nodeos. 
+- You should see an entry for stats_plugin in the logs when you restart nodeos. 
 - Your HTTP endpoint should receive POST requests as in [our sample JSON](sample-post.json)
 - Thats it, you should be all set to get realtime actions on the chain.
 
