@@ -1,10 +1,9 @@
-file(GLOB HEADERS "include/eosio/watcher_plugin/*.hpp")
-add_library( watcher_plugin
+file(GLOB HEADERS "include/eosio/stats_plugin/*.hpp")
+add_library( stats_plugin
              src/watcher_plugin.cpp
-             ${HEADERS} include/eosio/watcher_plugin/watcher_plugin.hpp
-                        include/eosio/watcher_plugin/http_async_client.hpp)
+             ${HEADERS} include/eosio/stats_plugin/stats_plugin.hpp)
 
-target_link_libraries( watcher_plugin chain_plugin eosio_chain appbase fc )
-target_include_directories( watcher_plugin PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include" )
+target_link_libraries( stats_plugin chain_plugin eosio_chain appbase fc )
+target_include_directories( stats_plugin PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include" )
 
-eosio_additional_plugin(watcher_plugin)
+eosio_additional_plugin(stats_plugin)

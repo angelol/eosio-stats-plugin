@@ -2,8 +2,7 @@
 *  @file
 *  @copyright eosauthority - free to use and modify - see LICENSE.txt
 */
-#include <eosio/watcher_plugin/watcher_plugin.hpp>
-#include <eosio/watcher_plugin/http_async_client.hpp>
+#include <eosio/stats_plugin/stats_plugin.hpp>
 #include <eosio/chain/controller.hpp>
 #include <eosio/chain/trace.hpp>
 #include <eosio/chain_plugin/chain_plugin.hpp>
@@ -28,7 +27,6 @@ namespace eosio {
    public:
 
       static const int64_t          default_age_limit = 60;
-      static const fc::microseconds http_timeout;
       static const fc::microseconds max_deserialization_time;
 
       typedef uint32_t action_seq_t;
@@ -86,7 +84,6 @@ namespace eosio {
       fc::optional<boost::signals2::scoped_connection> accepted_block_conn;
       fc::optional<boost::signals2::scoped_connection> applied_tx_conn;
       std::set<watcher_plugin_impl::filter_entry>      filter_on;
-      http_async_client                                httpc;
       fc::url                                          receiver_url;
       int64_t                                          age_limit = default_age_limit;
       action_queue_t                                   action_queue;
@@ -161,13 +158,6 @@ namespace eosio {
          }
       }
 
-      void send_message(const message& msg) {
-         dlog("Sending: ${a}", ("a", fc::json::to_pretty_string(msg)));
-         try {
-            httpc.post(receiver_url, msg, fc::time_point::now() + http_timeout);
-         }
-         FC_CAPTURE_AND_LOG(("Error while sending notification")(msg));
-      }
 
       void on_accepted_block(const block_state_ptr& block_state) {
          //~ ilog("on_accepted_block | block_state->block: ${u}", ("u",block_state->block));
@@ -208,13 +198,12 @@ namespace eosio {
 
             if( msg.actions.size() > 0 ) {
                //~ ilog("Sending message - msg.actions.size(): ${u}",("u",msg.actions.size()));
-               send_message(msg);
+               // send_message(msg);
             }
          }
       }
    };
 
-   const fc::microseconds watcher_plugin_impl::http_timeout             = fc::seconds(10);
    const fc::microseconds watcher_plugin_impl::max_deserialization_time = fc::seconds(5);
    const int64_t watcher_plugin_impl::default_age_limit;
 
@@ -281,14 +270,12 @@ namespace eosio {
    }
 
    void watcher_plugin::plugin_startup() {
-      my->httpc.start();
       ilog("Watcher plugin started");
    }
 
    void watcher_plugin::plugin_shutdown() {
       my->applied_tx_conn.reset();
       my->accepted_block_conn.reset();
-      my->httpc.stop();
    }
 
 }
