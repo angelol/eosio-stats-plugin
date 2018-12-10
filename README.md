@@ -51,7 +51,7 @@ The blockchain can be safely replayed while the plugin is running. No duplicate 
 You need to statically link this plugin with nodeos. To do that, build eosio like that:
 ```
 export LOCAL_CMAKE_FLAGS="-DEOSIO_ADDITIONAL_PLUGINS=<path-to-eosio-stats-plugin>"
-./build.sh -s EOS
+./eosio_build.sh -s EOS
 
 ```
 ## Add to your nodeos config.ini 
@@ -60,6 +60,8 @@ plugin = eosio::stats_plugin
 stats-mongodb-uri=mongodb://127.0.0.1:27017/eosstats
 
  ```
+You need to have a mongodb server running at the given URI. The name of the database that should be used by the plugin can be given after the slash, "eosstats" in this example.
+
 ## Replay the blockchain
 If you would like to gather block stats for historical blocks, the blockchain needs to be replayed after installation of the plugin.
 
