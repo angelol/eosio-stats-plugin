@@ -70,7 +70,7 @@ While the blockchain is replaying, you can check progress like this:
 ```
 mongo
 use eosstats
-db.stats_table.find().sort({block_num: -1}).limit(1).pretty()
+db.s.find().sort({block_num: -1}).limit(1).pretty()
 ```
 This query will show you the current block number.
 
