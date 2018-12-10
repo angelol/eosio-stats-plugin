@@ -44,6 +44,7 @@ public:
   fc::optional<mongocxx::pool> mongo_pool;
   string mongo_db_name;
   const std::string stats_table_name{"s"};
+  const std::string g_stats_table_name{"g"};
 
   typedef uint32_t action_seq_t;
 
@@ -176,7 +177,22 @@ public:
       ilog("Mongo Exception! Quitting...");
       app().quit();
     }
+    
 
+    mongocxx::collection g_stats_table =
+        mongo_conn[mongo_db_name][g_stats_table_name];
+    g_stats_table.update_one(
+      make_document(), 
+      make_document( 
+        kvp("$inc", 
+          make_document(
+            kvp("actions", b_int32{action_count}),
+            kvp("transactions", b_int32{tx_count})
+          )
+        ) 
+      ),
+      update_opts
+    );
     //~ ilog("Done processing block_state->block->transactions");
   }
 };
