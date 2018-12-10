@@ -1,84 +1,74 @@
-# EOSIO Watcher Plugin by EOS Authority
-The watcher plugin is useful to watch for specific actions on the chain and then send them to an HTTP url. 
-The HTTP POST is called as soon as the action is seen on the chain!
+# EOSIO Stats Plugin
+The eosio stats plugin can be used to gather statistics on the number of transactions and actions per block. Per-block data is written into a mongodb table for easy querying and analysis.
 
+## MongoDB Document Format 
+The plugin gathers the following data for every block:
+```
+{
+	"_id" : ObjectId("5c0ea0b980084e63d6219f57"),
+	"actions" : 1986,
+	"block_num" : 10614007,
+	"transactions" : 1986,
+	"cpu_usage_us" : 199880,
+	"net_usage_words" : 25818,
+	"time" : ISODate("2018-08-11T16:20:06Z")
+}
 
-# Watcher plugin features
-## Filter and get notifications for actions on any account
-You can either get notifications for all actions on a account, or any specific actions. You get notifications in a form of http POST call to the url you specify. 
+```
+Transactions is obviously the number of transactions in the block, no surprise there. 
 
-**NOTE:** in case of forks plugin can end up sending notifications for same transaction twice. That's because notifications are sent as soon as block is accepted (so there is no guarantee block is not on a fork). Receiver of notifications should handle the duplicate notification appropriately.
+The actions value is the number of individual actions (individual blockchain operations) including inline-actions.
 
-## Age limit for actions
-Usually you don't want to receive notifications for actions which happened months ago, just because your nodeos is resyncing. To prevent this you can specify age limit for blocks, which are filtered for actions you want to receive. This is by default set to 1 minute, but is configurable.
+The values cpu_usage_us and net_usage_words give the total usage of cpu and net resources of this block. The usage percentage of the chain can be calculated by comparing the value with "block_cpu_limit" or "block_net_limit" from cleos get info.
 
-## Flexible configuration
-Features just mentioned are configurable through options to nodeos (built with stats_plugin) or in your config.ini. Use `nodeos --help` to see help for options.
+Time could be used to generate beautiful graphs or for traffic analysis.
 
-## Asynchronous http calls
-Notifications are sent asynchronously, which means it does not interfere with normal operation of nodeos, even in case of unreliable http connection to the notification receiver.
+The plugin automatically installs indexes on the columns "actions", "transactions", "block_num" and "time", so they can be queried against.
 
-## Retry on failed calls
-To make sure no action is missed, even when a connection to the receiver is lost, on failed first attempt to send, plugin retries once more before giving up.
+## Useful Queries
+
+Get the block with the highest number of transactions:
+```
+db.stats_table.find().sort({transactions: -1}).limit(1)
+```
+
+Get the block with the highest number of actions:
+```
+db.stats_table.find().sort({actions: -1}).limit(1)
+```
+
+The transactions per seconds value (TPS) or actions per seconds (APS) can be calculated by taking number of transactions/actions in a block multiplied by 2.
+
+## Considerations while replaying the blockchain
+The blockchain can be safely replayed while the plugin is running. No duplicate or false data will be created in the mongodb. Existing block data will be updated when replaying.
 
 # Installation instructions
 
 ## Requirements
-- Works on any EOSIO node that runs v1.1.0 and up.
+- Works on any EOSIO node that runs v1.4.0 and up.
 
 ## Building the plugin [Install on your nodeos server]
-### EOSIO v1.2.0 and up
 You need to statically link this plugin with nodeos. To do that, build eosio like that:
 ```
 export LOCAL_CMAKE_FLAGS="-DEOSIO_ADDITIONAL_PLUGINS=<path-to-eosio-stats-plugin>"
 ./build.sh -s EOS
 
 ```
-### EOSIO v1.1.0 and up
-1. Remove or comment out this line in CMakeLists.txt:
+## Add to your nodeos config.ini 
 ```
-eosio_additional_plugin(stats_plugin)
-```
-
-2. Copy this repo to `<eosio-source-dir>/plugins/` You should now have `<eosio-source-dir>/plugins/watcher-plugin`
-3. Add the following line to `<eosio-source-dir>/plugins/CMakeLists.txt` with other `add_subdirectory` items
-  ```
-  add_subdirectory(watcher-plugin)
-  ```
-
-4. Add the following line to the bottom of `<eosio-source-dir>/programs/nodeos/CMakeLists.txt`
-  ```
-  target_link_libraries( nodeos PRIVATE -Wl,${whole_archive_flag} stats_plugin -Wl,${no_whole_archive_flag})
-  ```
-5. Build and install nodeos as usual. You could even just `cd <eosio-source-dir>/build` and then `sudo make install`
-
-# How to setup on your nodeos
-
-Enable this plugin using `--plugin` option to nodeos or in your config.ini. Use `nodeos --help` to see options used by this plugin.
-
-## Edit your nodeos config.ini (probably easier)
-```
-#Enable plugin
 plugin = eosio::stats_plugin
-#Set account:action so eosauthority:spaceinvader or just eosauthority: for all actions on eosauthority
-watch = eosauthority:
-#watch multiple if required 
-watch = b1:
-#watch multiple if required 
-watch = eosabc:forum
-#http endpoint for each action seen on the chain. JSON array if you there are multiple actions in one block.
-#see sample json example. All "watch" above will be sent to this URL and the URL can handle processing as required
-watch-receiver-url = http://127.0.0.1:8082/blockchain_action
-#Age limit in seconds for blocks to send notifications. No age limit if set to negative.
-#Used to prevent old actions from trigger HTTP request while on replay (seconds)
-watch-age-limit = 5
- ```
-## Check if the plugin has loaded
-- You should see an entry for stats_plugin in the logs when you restart nodeos. 
-- Your HTTP endpoint should receive POST requests as in [our sample JSON](sample-post.json)
-- Thats it, you should be all set to get realtime actions on the chain.
+stats-mongodb-uri=mongodb://127.0.0.1:27017/eosstats
 
-# Feedback & development
-- This plugin is used on production with space invaders. https://eosauthority.com/space/
-- You also use this plugin to setup realtime alerts similar to https://eosauthority.com/alerts 
-- Any suggestions and pull requests are welcome :)
+ ```
+## Replay the blockchain
+If you would like to gather block stats for historical blocks, the blockchain needs to be replayed after installation of the plugin.
+
+## Confirm that it's working
+While the blockchain is replaying, you can check progress like this:
+```
+mongo
+use eosstats
+db.stats_table.find().sort({block_num: -1}).limit(1).pretty()
+```
+This query will show you the current block number.
+

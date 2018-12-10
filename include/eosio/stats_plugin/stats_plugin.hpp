@@ -1,6 +1,8 @@
 /**
  *  @file
  *  @copyright eosauthority - free to use and modify - see LICENSE.txt
+ *  @copyright Angelo Laub 
+ *  Based on the awesome https://github.com/eosauthority/eosio-watcher-plugin
  */
 #pragma once
 #include <appbase/application.hpp>
@@ -24,6 +26,7 @@ namespace eosio {
       void plugin_initialize(const variables_map& options);
       void plugin_startup();
       void plugin_shutdown();
+      void mongo_init();
 
    private:
       stats_plugin_ptr my;

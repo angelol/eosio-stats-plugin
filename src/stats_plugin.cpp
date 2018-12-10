@@ -1,283 +1,250 @@
 /**
-*  @file
-*  @copyright eosauthority - free to use and modify - see LICENSE.txt
-*/
-#include <eosio/stats_plugin/stats_plugin.hpp>
+ *  @file
+ *  @copyright eosauthority - free to use and modify - see LICENSE.txt
+ *  @copyright Angelo Laub
+ *  Based on the awesome https://github.com/eosauthority/eosio-watcher-plugin
+ */
+#include <eosio/chain/block_state.hpp>
 #include <eosio/chain/controller.hpp>
 #include <eosio/chain/trace.hpp>
 #include <eosio/chain_plugin/chain_plugin.hpp>
-#include <eosio/chain/block_state.hpp>
+#include <eosio/stats_plugin/stats_plugin.hpp>
 
 #include <fc/io/json.hpp>
 #include <fc/network/url.hpp>
 
-#include <boost/signals2/connection.hpp>
 #include <boost/algorithm/string.hpp>
+#include <boost/signals2/connection.hpp>
 
 #include <unordered_map>
 
+#include <bsoncxx/json.hpp>
+#include <bsoncxx/types.hpp>
+#include <mongocxx/client.hpp>
+#include <mongocxx/exception/logic_error.hpp>
+#include <mongocxx/exception/operation_exception.hpp>
+#include <mongocxx/instance.hpp>
+#include <mongocxx/pool.hpp>
+#include <mongocxx/stdx.hpp>
+#include <mongocxx/uri.hpp>
+
+using bsoncxx::builder::basic::make_document;
+using bsoncxx::builder::basic::kvp;
+using bsoncxx::types::b_int32;
+using bsoncxx::types::b_date;
 
 namespace eosio {
-   static appbase::abstract_plugin& _stats_plugin = app().register_plugin<stats_plugin>();
+static appbase::abstract_plugin &_stats_plugin =
+    app().register_plugin<stats_plugin>();
 
-   using namespace chain;
+using namespace chain;
 
+class stats_plugin_impl {
+public:
+  fc::optional<mongocxx::pool> mongo_pool;
+  string mongo_db_name;
+  const std::string stats_table_name{"s"};
 
-   class stats_plugin_impl {
-   public:
+  typedef uint32_t action_seq_t;
 
-      static const int64_t          default_age_limit = 60;
-      static const fc::microseconds max_deserialization_time;
+  typedef std::unordered_multimap<transaction_id_type, action_trace>
+      action_queue_t;
 
-      typedef uint32_t action_seq_t;
+  chain_plugin *chain_plug = nullptr;
+  fc::optional<boost::signals2::scoped_connection> accepted_block_conn;
+  fc::optional<boost::signals2::scoped_connection> applied_tx_conn;
+  action_queue_t action_queue;
 
-      struct sequenced_action : public action {
-         sequenced_action(const action& act, action_seq_t seq, account_name receiver)
-            : action(act), seq_num(seq), receiver(receiver) {}
+  // Returns act_sequence incremented by the number of actions checked.
+  // So 1 (this action) + all the inline actions
+  action_seq_t on_action_trace(const action_trace &act,
+                               const transaction_id_type &tx_id,
+                               action_seq_t act_sequence) {
+    // ilog("on_action_trace - tx id: ${u}", ("u",tx_id));
+    action_queue.insert(std::make_pair(tx_id, act));
+    //~ ilog("Added to action_queue: ${u}", ("u",act.act));
+    act_sequence++;
 
-         action_seq_t seq_num;
-         account_name receiver;
-      };
+    for (const auto &iline : act.inline_traces) {
+      //~ ilog("Processing inline_trace: ${u}", ("u",iline));
+      act_sequence = on_action_trace(iline, tx_id, act_sequence);
+    }
 
-      struct action_notif {
-         action_notif(const sequenced_action& act, transaction_id_type tx_id,
-                      const variant& action_data, fc::time_point block_time,
-                      uint32_t block_num)
-            : tx_id(tx_id), account(act.account), name(act.name), seq_num(act.seq_num),
-              receiver(act.receiver), block_time(block_time), block_num(block_num),
-              authorization(act.authorization), action_data(action_data) {}
+    return act_sequence;
+  }
 
-         transaction_id_type      tx_id;
-         account_name             account;
-         action_name              name;
-         action_seq_t             seq_num;      // sequence number of action in tx
-         account_name             receiver;
-         fc::time_point           block_time;
-         uint32_t                 block_num;
+  void on_applied_tx(const transaction_trace_ptr &trace) {
+    auto id = trace->id;
+    //~ ilog("trace->id: ${u}",("u",trace->id));
+    //~ ilog("action_queue.count(id): ${u}",("u",action_queue.count(id)));
+    if (!action_queue.count(id)) {
+      action_seq_t seq = 0;
+      for (auto &at : trace->action_traces) {
+        seq = on_action_trace(at, id, seq);
+      }
+      // ilog("Transaction contains ${u} action traces", ("u", seq));
+    }
+  }
 
-         vector<permission_level> authorization;
-         fc::variant              action_data;
-      };
+  void on_accepted_block(const block_state_ptr &block_state) {
+    //~ ilog("on_accepted_block | block_state->block: ${u}",
+    //("u",block_state->block));
+    // ilog("block_num: ${u}", ("u",block_state->block->block_num));
+    fc::time_point btime = block_state->block->timestamp;
+    int32_t tx_count{0};
+    int32_t action_count{0};
+    int32_t cpu_usage_us{0};
+    int32_t net_usage_words{0};
 
+    transaction_id_type tx_id;
 
-      struct message {
-         std::vector<action_notif> actions;
-      };
-
-      struct filter_entry {
-         name receiver;
-         name action;
-
-         std::tuple<name, name> key() const {
-            return std::make_tuple(receiver, action);
-         }
-
-         friend bool operator<(const filter_entry& a, const filter_entry& b) {
-            return a.key() < b.key();
-         }
-      };
-
-
-      typedef std::unordered_multimap<transaction_id_type, sequenced_action> action_queue_t;
-
-      chain_plugin* chain_plug                                   = nullptr;
-      fc::optional<boost::signals2::scoped_connection> accepted_block_conn;
-      fc::optional<boost::signals2::scoped_connection> applied_tx_conn;
-      std::set<stats_plugin_impl::filter_entry>      filter_on;
-      fc::url                                          receiver_url;
-      int64_t                                          age_limit = default_age_limit;
-      action_queue_t                                   action_queue;
-
-
-      bool filter(const action_trace& act) {
-         if( filter_on.find({act.receipt.receiver, act.act.name}) != filter_on.end())
-            return true;
-         else if( filter_on.find({act.receipt.receiver, 0}) != filter_on.end())
-            return true;
-         return false;
+    //~ Process transactions from `block_state->block->transactions` because it
+    // includes all transactions including deferred ones
+    //~ ilog("Looping over all transaction objects in
+    // block_state->block->transactions");
+    for (const auto &trx : block_state->block->transactions) {
+      if (trx.trx.contains<transaction_id_type>()) {
+        //~ For deferred transactions the transaction id is easily accessible
+        //~ ilog("===> block_state->block->transactions->trx ID: ${u}",
+        //("u",trx.trx.get<transaction_id_type>()));
+        tx_id = trx.trx.get<transaction_id_type>();
+      } else {
+        //~ For non-deferred transactions we have to access the txid from within
+        // the packed transaction. The `trx` structure and `id()` getter method
+        // are defined in `transaction.hpp`
+        //~ ilog("===> block_state->block->transactions->trx ID: ${u}",
+        //("u",trx.trx.get<packed_transaction>().id()));
+        tx_id = trx.trx.get<packed_transaction>().id();
       }
 
-      fc::variant deserialize_action_data(action act) {
-         //~ ilog("deserialize_action_data - action:", ("u",act));  //~ happens on every block
-         auto& chain = chain_plug->chain();
-         auto serializer = chain.get_abi_serializer(act.account, max_deserialization_time);
-         FC_ASSERT(serializer.valid() &&
-                   serializer->get_action_type(act.name) != action_name(),
-                   "Unable to get abi for account: ${acc}, action: ${a} Not sending notification.",
-                   ("acc", act.account)("a", act.name));
-         return serializer->binary_to_variant(act.name.to_string(), act.data,
-                                              max_deserialization_time);
+      // Remove this matching tx from the action queue.
+      // If a transaction comes in a future block, this method allows us to
+      // preseve the
+      // remaining action queue between blocks to pickup a transaction at a
+      // later time when
+      // it is eventually included in a block, in comparison to flushing the
+      // remaining action
+      // queue and potentially leaving some transactions never to be alerted on.
+      const auto action_qeue_size = action_queue.count(tx_id);
+      action_count += action_qeue_size;
+      if (action_qeue_size > 0) {
+        auto itr = action_queue.find(tx_id);
+        action_queue.erase(itr);
       }
 
-      // Returns act_sequence incremented by the number of actions checked.
-      // So 1 (this action) + all the inline actions
-      action_seq_t on_action_trace(const action_trace& act, const transaction_id_type& tx_id,
-                                   action_seq_t act_sequence) {
-        ilog("on_action_trace - tx id: ${u}", ("u",tx_id));
-        action_queue.insert(std::make_pair(tx_id, sequenced_action(act.act, act_sequence,
-        act.receipt.receiver)));
-            //~ ilog("Added to action_queue: ${u}", ("u",act.act));
-         act_sequence++;
+      // ilog("TX ${u}", ("u", tx_id));
+      // ilog("Has used ${u} us of cpu", ("u", trx.cpu_usage_us));
+      cpu_usage_us += static_cast<int32_t>(trx.cpu_usage_us);
+      net_usage_words += static_cast<int32_t>(trx.net_usage_words);
+      tx_count += 1;
+    }
 
-         for( const auto& iline : act.inline_traces ) {
-            //~ ilog("Processing inline_trace: ${u}", ("u",iline));
-            act_sequence = on_action_trace(iline, tx_id, act_sequence);
-         }
+    // ilog("Block Nr. ${u}", ("u", block_state->block->block_num()));
+    // ilog("cpu_usage_us: ${u}", ("u", cpu_usage_us));
+    // ilog("TX Count: ${u}", ("u", tx_count));
+    // ilog("Action Count: ${u}", ("u", action_count));
 
-         return act_sequence;
-      }
+    auto mongo_client = mongo_pool->acquire();
+    auto &mongo_conn = *mongo_client;
+    mongocxx::collection stats_table =
+        mongo_conn[mongo_db_name][stats_table_name];
 
-      void on_applied_tx(const transaction_trace_ptr& trace) {
-         //~ ilog("on_applied_tx - trace object: ${u}", ("u",trace));
-         auto id = trace->id;
-         //~ ilog("trace->id: ${u}",("u",trace->id));
-         //~ ilog("action_queue.count(id): ${u}",("u",action_queue.count(id)));
-         if( !action_queue.count(id)) {
-            action_seq_t seq = 0;
-            for( auto& at : trace->action_traces ) {
-               seq = on_action_trace(at, id, seq);
-            }
-         }
-      }
+    std::chrono::microseconds microsec{btime.time_since_epoch().count()};
+    const auto millisec =
+        std::chrono::duration_cast<std::chrono::milliseconds>(microsec);
+    const auto block_num =
+        static_cast<int32_t>(block_state->block->block_num());
 
-      void build_message(message& msg, const block_state_ptr& block,
-                         const transaction_id_type& tx_id) {
-         //~ ilog("inside build_message - transaction id: ${u}", ("u",tx_id));
-         auto range = action_queue.equal_range(tx_id);
-         for( auto& it = range.first; it != range.second; it++ ) {
-            //~ ilog("inside build_message for loop on iterator for action_queue range");
-            //~ ilog("iterator it->first: ${u}", ("u",it->first));
-            //~ ilog("iterator it->second: ${u}", ("u",it->second));
-            auto         act_data = deserialize_action_data(it->second);
-            action_notif notif(it->second, tx_id, std::forward<fc::variant>(act_data),
-                               block->block->timestamp, block->block->block_num());
+    auto doc = make_document(kvp("block_num", b_int32{block_num}),
+                             kvp("actions", b_int32{action_count}),
+                             kvp("transactions", b_int32{tx_count}),
+                             kvp("cpu_usage_us", b_int32{cpu_usage_us}),
+                             kvp("net_usage_words", b_int32{net_usage_words}),
+                             kvp("time", b_date{millisec}));
 
-            msg.actions.push_back(notif);
-         }
-      }
+    auto filter = make_document(kvp("block_num", b_int32{block_num}));
 
+    mongocxx::options::update update_opts{};
+    update_opts.upsert(true);
 
-      void on_accepted_block(const block_state_ptr& block_state) {
-         //~ ilog("on_accepted_block | block_state->block: ${u}", ("u",block_state->block));
-         //ilog("block_num: ${u}", ("u",block_state->block->block_num));
-         fc::time_point btime = block_state->block->timestamp;
-         if( age_limit == -1 || (fc::time_point::now() - btime < fc::seconds(age_limit))) {
-            message             msg;
-            transaction_id_type tx_id;
+    /**
+      * Use replace_one to make this operation replay-safe.
+      * When replaying, we're just overwriting this document,
+      * we are not creating duplicate entries.
+      */
+    if (!stats_table.replace_one(filter.view(), doc.view(), update_opts)) {
+      ilog("Mongo Exception! Quitting...");
+      app().quit();
+    }
 
-            //~ Process transactions from `block_state->block->transactions` because it includes all transactions including deferred ones
-            //~ ilog("Looping over all transaction objects in block_state->block->transactions");
-            for( const auto& trx : block_state->block->transactions ) {
-               if( trx.trx.contains<transaction_id_type>()) {
-                  //~ For deferred transactions the transaction id is easily accessible
-                  //~ ilog("===> block_state->block->transactions->trx ID: ${u}", ("u",trx.trx.get<transaction_id_type>()));
-                  tx_id = trx.trx.get<transaction_id_type>();
-               } else {
-                  //~ For non-deferred transactions we have to access the txid from within the packed transaction. The `trx` structure and `id()` getter method are defined in `transaction.hpp`
-                  //~ ilog("===> block_state->block->transactions->trx ID: ${u}", ("u",trx.trx.get<packed_transaction>().id()));
-                  tx_id = trx.trx.get<packed_transaction>().id();
-               }
+    //~ ilog("Done processing block_state->block->transactions");
+  }
+};
 
-               //~ ilog("action_queue.size: ${u}", ("u",action_queue.size()));
-               if( action_queue.count(tx_id)) {
-                  build_message(msg, block_state, tx_id);
-                  
-                  // Remove this matching tx from the action queue.
-                  // If a transaction comes in a future block, this method allows us to preseve the
-                  // remaining action queue between blocks to pickup a transaction at a later time when
-                  // it is eventually included in a block, in comparison to flushing the remaining action
-                  // queue and potentially leaving some transactions never to be alerted on.
-                  auto itr = action_queue.find(tx_id);
-                  action_queue.erase(itr);
-               }
-            }
+stats_plugin::stats_plugin() : my(new stats_plugin_impl()) {}
 
-            //~ ilog("Done processing block_state->block->transactions");
+stats_plugin::~stats_plugin() {}
 
-            if( msg.actions.size() > 0 ) {
-               //~ ilog("Sending message - msg.actions.size(): ${u}",("u",msg.actions.size()));
-               // send_message(msg);
-            }
-         }
-      }
-   };
-
-   const fc::microseconds stats_plugin_impl::max_deserialization_time = fc::seconds(5);
-   const int64_t stats_plugin_impl::default_age_limit;
-
-   stats_plugin::stats_plugin() : my(new stats_plugin_impl()) {}
-
-   stats_plugin::~stats_plugin() {}
-
-   void stats_plugin::set_program_options(options_description&, options_description& cfg) {
-      cfg.add_options()
-         ("watch", bpo::value<vector<string>>()->composing(),
-          "Track actions which match receiver:action. In case action is not specified, "
-          "all actions to specified account are tracked.")
-         ("watch-receiver-url", bpo::value<string>(),
-          "URL where to send actions being tracked")
-         ("watch-age-limit",
-          bpo::value<int64_t>()->default_value(stats_plugin_impl::default_age_limit),
-          "Age limit in seconds for blocks to send notifications about."
-          " No age limit if this is set to negative.");
-
-   }
-
-   void stats_plugin::plugin_initialize(const variables_map& options) {
-
-      try {
-         EOS_ASSERT(options.count("watch-receiver-url") == 1, fc::invalid_arg_exception,
-                    "watch_plugin requires one watch-receiver-url to be specified!");
-
-         string url_str = options.at("watch-receiver-url").as<string>();
-         my->receiver_url = fc::url(url_str);
-
-         if( options.count("watch")) {
-            auto fo = options.at("watch").as<vector<string>>();
-            for( auto& s : fo ) {
-               // TODO: Don't require ':' for watching whole accounts
-               std::vector<std::string> v;
-               boost::split(v, s, boost::is_any_of(":"));
-               EOS_ASSERT(v.size() == 2, fc::invalid_arg_exception,
-                          "Invalid value ${s} for --watch",
-                          ("s", s));
-               stats_plugin_impl::filter_entry fe{v[0], v[1]};
-               EOS_ASSERT(fe.receiver.value, fc::invalid_arg_exception, "Invalid value ${s} for "
-                                                                        "--watch", ("s", s));
-               my->filter_on.insert(fe);
-            }
-         }
-
-         if( options.count("watch-age-limit"))
-            my->age_limit = options.at("watch-age-limit").as<int64_t>();
-
-
-         my->chain_plug = app().find_plugin<chain_plugin>();
-         auto& chain = my->chain_plug->chain();
-         my->accepted_block_conn.emplace(chain.accepted_block.connect(
-            [&](const block_state_ptr& b_state) {
-               my->on_accepted_block(b_state);
-            }));
-
-         my->applied_tx_conn.emplace(chain.applied_transaction.connect(
-            [&](const transaction_trace_ptr& tt) {
-               my->on_applied_tx(tt);
-            }
-         ));
-      } FC_LOG_AND_RETHROW()
-   }
-
-   void stats_plugin::plugin_startup() {
-      ilog("Watcher plugin started");
-   }
-
-   void stats_plugin::plugin_shutdown() {
-      my->applied_tx_conn.reset();
-      my->accepted_block_conn.reset();
-   }
-
+void stats_plugin::set_program_options(options_description &,
+                                       options_description &cfg) {
+  cfg.add_options()(
+      "stats-mongodb-uri,m", bpo::value<std::string>(),
+      "MongoDB URI connection string, see: "
+      "https://docs.mongodb.com/master/reference/connection-string/."
+      " Default database 'eosstats' is used if not specified in URI."
+      " Example: mongodb://127.0.0.1:27017/eosstats");
 }
 
-FC_REFLECT(eosio::stats_plugin_impl::action_notif, (tx_id)(account)(name)
-   (seq_num)(receiver)(block_time)(block_num)(authorization)(action_data))
-FC_REFLECT(eosio::stats_plugin_impl::message, (actions))
+void stats_plugin::mongo_init() {
+  auto mongo_client = my->mongo_pool->acquire();
+  auto &mongo_conn = *mongo_client;
+  mongocxx::collection stats_table =
+      mongo_conn[my->mongo_db_name][my->stats_table_name];
+  if (stats_table.count(make_document()) == 0) {
+    // this is our first run, database is still empty
+    ilog("Installing mongodb indexes");
+    stats_table.create_index(
+        bsoncxx::from_json(R"xxx({ "block_num" : 1 })xxx"));
+    stats_table.create_index(
+        bsoncxx::from_json(R"xxx({ "transactions" : 1 })xxx"));
+    stats_table.create_index(bsoncxx::from_json(R"xxx({ "actions" : 1 })xxx"));
+    stats_table.create_index(bsoncxx::from_json(R"xxx({ "time" : 1 })xxx"));
+  }
+}
+
+void stats_plugin::plugin_initialize(const variables_map &options) {
+  try {
+    EOS_ASSERT(options.count("stats-mongodb-uri") == 1,
+               fc::invalid_arg_exception,
+               "stats_plugin requires stats-mongodb-uri to be specified (e.g. "
+               "\"mongodb://127.0.0.1:27017/eosstats\")!");
+
+    string uri_str = options.at("stats-mongodb-uri").as<string>();
+    ilog("connecting to ${u}", ("u", uri_str));
+    mongocxx::uri uri = mongocxx::uri{uri_str};
+    my->mongo_db_name = uri.database();
+    if (my->mongo_db_name.empty()) {
+      my->mongo_db_name = "eosstats";
+    }
+    my->mongo_pool.emplace(uri);
+
+    mongo_init();
+
+    my->chain_plug = app().find_plugin<chain_plugin>();
+    auto &chain = my->chain_plug->chain();
+    my->accepted_block_conn.emplace(chain.accepted_block.connect([&](
+        const block_state_ptr &b_state) { my->on_accepted_block(b_state); }));
+
+    my->applied_tx_conn.emplace(chain.applied_transaction.connect(
+        [&](const transaction_trace_ptr &tt) { my->on_applied_tx(tt); }));
+  }
+  FC_LOG_AND_RETHROW()
+}
+
+void stats_plugin::plugin_startup() { ilog("Stats plugin started"); }
+
+void stats_plugin::plugin_shutdown() {
+  my->applied_tx_conn.reset();
+  my->accepted_block_conn.reset();
+}
+}
