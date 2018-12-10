@@ -29,12 +29,12 @@ The plugin automatically installs indexes on the columns "actions", "transaction
 
 Get the block with the highest number of transactions:
 ```
-db.stats_table.find().sort({transactions: -1}).limit(1)
+db.s.find().sort({transactions: -1}).limit(1)
 ```
 
 Get the block with the highest number of actions:
 ```
-db.stats_table.find().sort({actions: -1}).limit(1)
+db.s.find().sort({actions: -1}).limit(1)
 ```
 
 The transactions per seconds value (TPS) or actions per seconds (APS) can be calculated by taking number of transactions/actions in a block multiplied by 2.
