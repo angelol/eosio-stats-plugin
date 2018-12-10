@@ -40,7 +40,7 @@ db.s.find().sort({actions: -1}).limit(1)
 The transactions per seconds value (TPS) or actions per seconds (APS) can be calculated by taking number of transactions/actions in a block multiplied by 2.
 
 ## Considerations while replaying the blockchain
-The blockchain can be safely replayed while the plugin is running. No duplicate or false data will be created in the mongodb. Existing block data will be updated when replaying.
+When replaying the blockchain, please add the --stats-plugin-wipe-mongo flag to nodeos to make sure the action and transaction counters don't get messed up.
 
 # Installation instructions
 

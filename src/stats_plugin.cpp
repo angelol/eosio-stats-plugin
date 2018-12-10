@@ -31,6 +31,7 @@
 using bsoncxx::builder::basic::make_document;
 using bsoncxx::builder::basic::kvp;
 using bsoncxx::types::b_int32;
+using bsoncxx::types::b_int64;
 using bsoncxx::types::b_date;
 
 namespace eosio {
@@ -147,7 +148,7 @@ public:
 
     auto mongo_client = mongo_pool->acquire();
     auto &mongo_conn = *mongo_client;
-    mongocxx::collection stats_table =
+    auto stats_table =
         mongo_conn[mongo_db_name][stats_table_name];
 
     std::chrono::microseconds microsec{btime.time_since_epoch().count()};
@@ -169,9 +170,7 @@ public:
     update_opts.upsert(true);
 
     /**
-      * Use replace_one to make this operation replay-safe.
-      * When replaying, we're just overwriting this document,
-      * we are not creating duplicate entries.
+      * Use replace_one to make this operation fork- and replay-safe
       */
     if (!stats_table.replace_one(filter.view(), doc.view(), update_opts)) {
       ilog("Mongo Exception! Quitting...");
@@ -179,15 +178,16 @@ public:
     }
     
 
-    mongocxx::collection g_stats_table =
+    // todo: handle forks (counter might become slightly inaccurate due to microforks)
+    auto g_stats_table =
         mongo_conn[mongo_db_name][g_stats_table_name];
     g_stats_table.update_one(
       make_document(), 
       make_document( 
         kvp("$inc", 
           make_document(
-            kvp("actions", b_int32{action_count}),
-            kvp("transactions", b_int32{tx_count})
+            kvp("actions", b_int64{static_cast<int64_t>(action_count)}),
+            kvp("transactions", b_int64{static_cast<int64_t>(tx_count)})
           )
         ) 
       ),
@@ -208,13 +208,16 @@ void stats_plugin::set_program_options(options_description &,
       "MongoDB URI connection string, see: "
       "https://docs.mongodb.com/master/reference/connection-string/."
       " Default database 'eosstats' is used if not specified in URI."
-      " Example: mongodb://127.0.0.1:27017/eosstats");
+      " Example: mongodb://127.0.0.1:27017/eosstats")
+      ("stats-plugin-wipe-mongo", bpo::bool_switch()->default_value(false),
+         "Required with --replay-blockchain, --hard-replay-blockchain, or --delete-all-blocks to wipe mongo db."
+         "This option required to prevent accidental wipe of mongo db.");
 }
 
 void stats_plugin::mongo_init() {
   auto mongo_client = my->mongo_pool->acquire();
   auto &mongo_conn = *mongo_client;
-  mongocxx::collection stats_table =
+  auto stats_table =
       mongo_conn[my->mongo_db_name][my->stats_table_name];
   if (stats_table.count(make_document()) == 0) {
     // this is our first run, database is still empty
@@ -226,6 +229,17 @@ void stats_plugin::mongo_init() {
     stats_table.create_index(bsoncxx::from_json(R"xxx({ "actions" : 1 })xxx"));
     stats_table.create_index(bsoncxx::from_json(R"xxx({ "time" : 1 })xxx"));
   }
+}
+void stats_plugin::wipe_database() {
+   ilog("stats plugin wipe_database");
+
+   auto mongo_client = my->mongo_pool->acquire();
+   auto &mongo_conn = *mongo_client;
+   auto db = mongo_conn[my->mongo_db_name];
+
+   db.drop();
+   
+   ilog("done wipe_database");
 }
 
 void stats_plugin::plugin_initialize(const variables_map &options) {
@@ -243,6 +257,16 @@ void stats_plugin::plugin_initialize(const variables_map &options) {
       my->mongo_db_name = "eosstats";
     }
     my->mongo_pool.emplace(uri);
+    
+    if( options.at( "replay-blockchain" ).as<bool>() || options.at( "hard-replay-blockchain" ).as<bool>() || options.at( "delete-all-blocks" ).as<bool>() ) {
+            if( options.at( "stats-plugin-wipe-mongo" ).as<bool>()) {
+               wipe_database();
+            } else {
+               EOS_ASSERT( false, chain::plugin_config_exception, "--stats-plugin-wipe-mongo required with --replay-blockchain, --hard-replay-blockchain, or --delete-all-blocks"
+                                 " --stats-plugin-wipe-mongo remove all eosstats collections from mongodb." );
+            }
+     }
+       
 
     mongo_init();
 

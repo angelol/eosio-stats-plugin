@@ -27,6 +27,7 @@ namespace eosio {
       void plugin_startup();
       void plugin_shutdown();
       void mongo_init();
+      void wipe_database();
 
    private:
       stats_plugin_ptr my;
