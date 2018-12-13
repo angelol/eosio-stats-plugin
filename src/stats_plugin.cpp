@@ -63,7 +63,11 @@ public:
                                const transaction_id_type &tx_id,
                                action_seq_t act_sequence) {
     // ilog("on_action_trace - tx id: ${u}", ("u",tx_id));
-    action_queue.insert(std::make_pair(tx_id, act));
+    
+    // Filter out internal onblock notifications as they are internal and do not appear in a block
+    if( !(act.act.account == N(eosio) && act.act.name == N(onblock)) ) {
+      action_queue.insert(std::make_pair(tx_id, act));
+    }
     //~ ilog("Added to action_queue: ${u}", ("u",act.act));
     act_sequence++;
 
