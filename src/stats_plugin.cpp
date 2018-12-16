@@ -42,6 +42,11 @@ using namespace chain;
 
 class stats_plugin_impl {
 public:
+  /*
+   * mongocxx::instance can only exist once per process
+   * and it already exists due to the mongodb plugin (even * if it is not switched on)
+   */
+  // mongocxx::instance mongo_inst;
   fc::optional<mongocxx::pool> mongo_pool;
   string mongo_db_name;
   const std::string stats_table_name{"s"};
@@ -49,7 +54,7 @@ public:
 
   typedef uint32_t action_seq_t;
 
-  typedef std::unordered_multimap<transaction_id_type, action_trace>
+  typedef std::map<transaction_id_type, int32_t>
       action_queue_t;
 
   chain_plugin *chain_plug = nullptr;
@@ -63,10 +68,8 @@ public:
                                const transaction_id_type &tx_id,
                                action_seq_t act_sequence) {
     // ilog("on_action_trace - tx id: ${u}", ("u",tx_id));
-    
-    // Filter out internal onblock notifications as they are internal and do not appear in a block
     if( !(act.act.account == N(eosio) && act.act.name == N(onblock)) ) {
-      action_queue.insert(std::make_pair(tx_id, act));
+      action_queue[tx_id] += 1;
     }
     //~ ilog("Added to action_queue: ${u}", ("u",act.act));
     act_sequence++;
@@ -83,7 +86,7 @@ public:
     auto id = trace->id;
     //~ ilog("trace->id: ${u}",("u",trace->id));
     //~ ilog("action_queue.count(id): ${u}",("u",action_queue.count(id)));
-    if (!action_queue.count(id)) {
+    if (!action_queue[id]) {
       action_seq_t seq = 0;
       for (auto &at : trace->action_traces) {
         seq = on_action_trace(at, id, seq);
@@ -131,12 +134,10 @@ public:
       // it is eventually included in a block, in comparison to flushing the
       // remaining action
       // queue and potentially leaving some transactions never to be alerted on.
-      const auto action_qeue_size = action_queue.count(tx_id);
+      const auto action_qeue_size = action_queue[tx_id];
       action_count += action_qeue_size;
-      if (action_qeue_size > 0) {
-        auto itr = action_queue.find(tx_id);
-        action_queue.erase(itr);
-      }
+      // auto itr = action_queue.find(tx_id);
+      // ilog("deleting txid ${u}", ("u", tx_id));
 
       // ilog("TX ${u}", ("u", tx_id));
       // ilog("Has used ${u} us of cpu", ("u", trx.cpu_usage_us));
@@ -144,6 +145,11 @@ public:
       net_usage_words += static_cast<int32_t>(trx.net_usage_words);
       tx_count += 1;
     }
+
+    action_queue.clear();
+
+
+    ilog("action_qeue_size: ${u}", ("u", action_queue));
 
     // ilog("Block Nr. ${u}", ("u", block_state->block->block_num()));
     // ilog("cpu_usage_us: ${u}", ("u", cpu_usage_us));
