@@ -254,8 +254,8 @@ void stats_plugin::mongo_init() {
     stats_table.create_index(
         bsoncxx::from_json(R"xxx({ "block_num" : 1 })xxx"));
     stats_table.create_index(
-        bsoncxx::from_json(R"xxx({ "transactions" : 1 })xxx"));
-    stats_table.create_index(bsoncxx::from_json(R"xxx({ "actions" : 1 })xxx"));
+        bsoncxx::from_json(R"xxx({ "transactions" : -1, "block_num": 1 })xxx"));
+    stats_table.create_index(bsoncxx::from_json(R"xxx({ "actions" : -1, "block_num": 1 })xxx"));
     stats_table.create_index(bsoncxx::from_json(R"xxx({ "time" : 1 })xxx"));
   }
 }
