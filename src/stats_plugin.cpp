@@ -83,6 +83,20 @@ public:
   }
 
   void on_applied_tx(const transaction_trace_ptr &trace) {
+    if (!trace->receipt) {
+      return;
+    }
+    if(trace->receipt->status != transaction_receipt_header::executed) {
+      return;
+    }
+    // If we later find that a transaction was failed before it's included in a block, remove its actions from the action queue
+    if (trace->failed_dtrx_trace) {
+      if (action_queue[trace->failed_dtrx_trace->id]) {
+        action_queue.erase(action_queue.find(trace->failed_dtrx_trace->id));
+        return;
+      }
+    }
+
     auto id = trace->id;
     //~ ilog("trace->id: ${u}",("u",trace->id));
     //~ ilog("action_queue.count(id): ${u}",("u",action_queue.count(id)));
@@ -92,6 +106,9 @@ public:
         seq = on_action_trace(at, id, seq);
       }
       // ilog("Transaction contains ${u} action traces", ("u", seq));
+    } else {
+      // fork
+      action_queue.erase(action_queue.find(id));
     }
   }
 
@@ -134,22 +151,24 @@ public:
       // it is eventually included in a block, in comparison to flushing the
       // remaining action
       // queue and potentially leaving some transactions never to be alerted on.
-      const auto action_qeue_size = action_queue[tx_id];
-      action_count += action_qeue_size;
-      // auto itr = action_queue.find(tx_id);
-      // ilog("deleting txid ${u}", ("u", tx_id));
+      if( trx.status == transaction_receipt_header::executed ) {
+        const auto action_qeue_size = action_queue[tx_id];
+        action_count += action_qeue_size;
+        // auto itr = action_queue.find(tx_id);
+        // ilog("deleting txid ${u}", ("u", tx_id));
 
-      // ilog("TX ${u}", ("u", tx_id));
-      // ilog("Has used ${u} us of cpu", ("u", trx.cpu_usage_us));
-      cpu_usage_us += static_cast<int32_t>(trx.cpu_usage_us);
-      net_usage_words += static_cast<int32_t>(trx.net_usage_words);
-      tx_count += 1;
+        // ilog("TX ${u}", ("u", tx_id));
+        // ilog("Has used ${u} us of cpu", ("u", trx.cpu_usage_us));
+        cpu_usage_us += static_cast<int32_t>(trx.cpu_usage_us);
+        net_usage_words += static_cast<int32_t>(trx.net_usage_words);
+        tx_count += 1;
+      }
     }
-
+    
     action_queue.clear();
 
 
-    ilog("action_qeue_size: ${u}", ("u", action_queue));
+    // ilog("action_qeue_size: ${u}", ("u", action_queue));
 
     // ilog("Block Nr. ${u}", ("u", block_state->block->block_num()));
     // ilog("cpu_usage_us: ${u}", ("u", cpu_usage_us));
@@ -160,12 +179,12 @@ public:
     auto &mongo_conn = *mongo_client;
     auto stats_table =
         mongo_conn[mongo_db_name][stats_table_name];
-
+    const auto block_num =
+        static_cast<int32_t>(block_state->block->block_num());
     std::chrono::microseconds microsec{btime.time_since_epoch().count()};
     const auto millisec =
         std::chrono::duration_cast<std::chrono::milliseconds>(microsec);
-    const auto block_num =
-        static_cast<int32_t>(block_state->block->block_num());
+    
 
     auto doc = make_document(kvp("block_num", b_int32{block_num}),
                              kvp("actions", b_int32{action_count}),
