@@ -1,5 +1,5 @@
 # EOSIO Stats Plugin
-The eosio stats plugin can be used to gather statistics on the number of transactions and actions per block. Per-block data is written into a mongodb table for easy querying and analysis.
+The eosio stats plugin can be used to gather statistics on the number of transactions and actions per block. Per-block data is written into a mongodb table for easy querying and analysis. 
 
 ## MongoDB Document Format 
 The plugin gathers the following data for every block:
@@ -38,6 +38,9 @@ db.s.find().sort({actions: -1}).limit(1)
 ```
 
 The transactions per seconds value (TPS) or actions per seconds (APS) can be calculated by taking number of transactions/actions in a block multiplied by 2.
+
+## Analysis Tools
+As a companion project, I built [eosstats](https://github.com/angelol/eosstats/) that provides a livestream via websocket of the activity in current blocks. It can also be used to feed information about your favourite eosio-based blockchain to [blocktivity](http://blocktivity.info/).
 
 ## Considerations while replaying the blockchain
 When replaying the blockchain, please add the --stats-plugin-wipe-mongo flag to nodeos to make sure the action and transaction counters don't get messed up.
