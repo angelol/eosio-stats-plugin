@@ -61,6 +61,7 @@ export LOCAL_CMAKE_FLAGS="-DEOSIO_ADDITIONAL_PLUGINS=<path-to-eosio-stats-plugin
 ```
 plugin = eosio::stats_plugin
 stats-mongodb-uri=mongodb://127.0.0.1:27017/eosstats
+read-mode = read-only
 
  ```
 You need to have a mongodb server running at the given URI. The name of the database that should be used by the plugin can be given after the slash, "eosstats" in this example.
